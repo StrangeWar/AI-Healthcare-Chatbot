@@ -10,6 +10,12 @@ This project is an AI-powered healthcare chatbot that predicts possible diseases
 - **Backend (Flask):** Handles prediction requests and model inference.
 - **Fine-tuned PubMedBERT Model:** Trained on a synthetic symptom-disease dataset for robust predictions.
 - **Customizable Disease/Symptom Mapping:** Easily extendable for new diseases or symptoms.
+- **Advanced NLP Features:**
+  - Symptom extraction
+  - Intent detection
+  - Sentiment analysis
+  - Spell correction
+  - Symptom synonym mapping
 
 ## Architecture
 - **Frontend:**
@@ -26,6 +32,7 @@ This project is an AI-powered healthcare chatbot that predicts possible diseases
   - Model and tokenizer saved in `pubmedbert-finetuned/`
 - **Dataset:**
   - `realistic_synthetic_symptom_disease_dataset.csv` contains synthetic symptom-disease pairs
+  - Data augmentation supported via `augment_symptoms.py`
   - `label_order.json` defines disease label order for consistent encoding
 
 ## Setup & Installation
@@ -66,26 +73,50 @@ This project is an AI-powered healthcare chatbot that predicts possible diseases
 - `biobert_helper.py` — Model loading, preprocessing, and prediction logic
 - `finetune_biobert.py` — Script to fine-tune PubMedBERT on the dataset
 - `evaluate_pubmedbert.py` — Model evaluation script
+- `analyze_dataset.py` — Dataset analysis and statistics
+- `augment_symptoms.py` — Data augmentation using paraphrasing
+- `generate_label_order.py` — Generate consistent disease label ordering
 - `realistic_synthetic_symptom_disease_dataset.csv` — Training/evaluation data
 - `label_order.json` — Disease label mapping
 - `pubmedbert-finetuned/` — Fine-tuned model and tokenizer files
 - `src/` — React frontend source code
-- `README.md` — Project documentation
 
 ## Model & Dataset Details
-- **Model:** Fine-tuned PubMedBERT (from HuggingFace) for multi-class disease classification.
-- **Training:** See `finetune_biobert.py` for training pipeline and metrics.
-- **Evaluation:** See `evaluate_pubmedbert.py` for accuracy, classification report, and confusion matrix.
-- **Dataset:** Synthetic, realistic symptom-disease pairs for robust generalization.
+- **Model:** 
+  - Base: PubMedBERT (microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract)
+  - Fine-tuned for multi-class disease classification
+  - Includes confidence thresholds for reliable predictions
+- **Training:** 
+  - See `finetune_biobert.py` for training pipeline and metrics
+  - Supports data augmentation via paraphrasing
+  - Uses weighted cross-entropy loss for balanced training
+- **Evaluation:** 
+  - See `evaluate_pubmedbert.py` for accuracy, classification report, and confusion matrix
+  - Dataset analysis tools in `analyze_dataset.py`
+- **Dataset:** 
+  - Synthetic, realistic symptom-disease pairs
+  - Supports automated augmentation
+  - Includes common variations and synonyms of symptoms
+
+## Supported Diseases & Symptoms
+The chatbot includes mappings for various common conditions including:
+- Respiratory: Bronchitis, Asthma, Pneumonia
+- Infectious: COVID-19, Flu, Common Cold, Chickenpox
+- Neurological: Migraine, Meningitis
+- Digestive: Gastroenteritis
+- Other: Allergic Rhinitis, Sinusitis, Malaria, Tuberculosis
+
+Each disease has associated key symptoms that help in accurate diagnosis.
 
 ## Customization & Extension
-- Add new diseases or symptoms by updating the dataset and retraining the model.
-- Extend frontend UI in `src/` for more features (e.g., hospital recommendations, maps).
-- Backend logic can be expanded for more advanced NLP or integration with medical APIs.
+- Add new diseases or symptoms by updating the dataset and retraining the model
+- Extend frontend UI in `src/` for more features (e.g., hospital recommendations, maps)
+- Backend logic can be expanded for more advanced NLP or integration with medical APIs
+- Customize symptom synonyms and disease mappings in `biobert_helper.py`
 
 ## License
 This project is for educational and research purposes. Please consult a healthcare professional for real medical advice.
 
 ---
 
-*Generated on May 8, 2025.*
+*Generated on June 3, 2025.*
