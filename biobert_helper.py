@@ -1,6 +1,7 @@
+from typing import List, Dict, Set, Tuple, Optional
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoConfig, pipeline
 import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoConfig, pipeline
 import re
 import pandas as pd
 import spacy
@@ -109,50 +110,145 @@ def preprocess_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-def predict_disease(symptoms_text):
+class ConversationState:
+    def __init__(self):
+        self.confirmed_symptoms: Set[str] = set()
+        self.denied_symptoms: Set[str] = set()
+        self.conversation_history: List[Dict] = []
+        self.current_confidence: float = 0.0
+        self.top_predictions: List[Dict] = []
+
+    def add_interaction(self, symptoms_text: str, predictions: List[Dict]):
+        self.conversation_history.append({
+            "input": symptoms_text,
+            "predictions": predictions
+        })
+        if predictions:
+            self.top_predictions = predictions[:3]
+            self.current_confidence = predictions[0]["confidence"]
+
+    def add_symptom_response(self, symptom: str, is_confirmed: bool):
+        if is_confirmed:
+            self.confirmed_symptoms.add(symptom)
+        else:
+            self.denied_symptoms.add(symptom)
+
+conversations: Dict[str, ConversationState] = {}
+
+def get_or_create_conversation(session_id: str) -> ConversationState:
+    if session_id not in conversations:
+        conversations[session_id] = ConversationState()
+    return conversations[session_id]
+
+def predict_disease(symptoms_text: str, session_id: str = None) -> Tuple[List[Dict], str, List[str], str, str]:
+    # Get conversation state if session_id provided
+    conv_state = get_or_create_conversation(session_id) if session_id else None
+    
     # Preprocess input
     clean_text = preprocess_text(symptoms_text)
-    print(f"Preprocessed input: {clean_text}")
     extracted = extract_symptoms(symptoms_text)
     intent = detect_intent(symptoms_text)
     sentiment = detect_sentiment(symptoms_text)
-    model.eval()  # Ensure model is in eval mode
+
+    # If we have conversation state, include confirmed symptoms
+    if conv_state and conv_state.confirmed_symptoms:
+        clean_text += ". " + ", ".join(conv_state.confirmed_symptoms)
+
+    model.eval()
     inputs = tokenizer(clean_text, return_tensors='pt', truncation=True, padding=True)
     with torch.no_grad():
         outputs = model(**inputs)
         logits = outputs.logits
         probs = F.softmax(logits, dim=1).squeeze().tolist()
+    
     predictions = [
-        {'disease': label, 'confidence': float(round(prob, 3))}
+        {'disease': label, 'confidence': float(round(prob * 100, 1)) if prob <= 1.0 else float(round(prob, 1))}
         for label, prob in zip(DISEASE_LABELS, probs)
     ]
     predictions = sorted(predictions, key=lambda x: x['confidence'], reverse=True)
+    
+    # Update conversation state
+    if conv_state:
+        conv_state.add_interaction(symptoms_text, predictions)
+    
     top = predictions[0]
-    threshold = 0.2
-    if top['confidence'] < threshold:
-        explanation = "The model is not confident about the prediction. Please provide more details or consult a healthcare professional."
+    threshold = 20.0  # 20% confidence threshold
+    
+    # Adjust explanation based on conversation state
+    if conv_state and conv_state.conversation_history:
+        if top['confidence'] < threshold:
+            explanation = (
+                f"Based on our conversation so far, I'm not confident enough about the diagnosis. "
+                f"I'll ask you some more questions to better understand your symptoms."
+            )
+        else:
+            previous_confidence = conv_state.conversation_history[-2]['predictions'][0]['confidence'] if len(conv_state.conversation_history) > 1 else 0
+            confidence_change = top['confidence'] - previous_confidence
+            
+            if confidence_change > 5:
+                explanation = (
+                    f"My confidence has increased! Based on all symptoms described, "
+                    f"the most likely condition is {top['disease']} "
+                    f"(confidence: {top['confidence']}%). Here are other possibilities:\n"
+                    + ' • '.join([f"{p['disease']} ({p['confidence']}%)" for p in predictions[1:3]])
+                )
+            else:
+                explanation = (
+                    f"Based on all symptoms described, the most likely condition is {top['disease']} "
+                    f"(confidence: {top['confidence']}%). Other possibilities include:\n"
+                    + ' • '.join([f"{p['disease']} ({p['confidence']}%)" for p in predictions[1:3]])
+                )
     else:
-        explanation = f"From what you've described, here are some possible conditions: " + \
-            ' • '.join([f"{p['disease']} ({p['confidence']}%)" for p in predictions[:5]]) + \
-            f" Based on your symptoms, the most likely condition is {top['disease']} (confidence: {top['confidence']}%). Please consult a healthcare professional for confirmation."
-    # Return extracted symptoms, intent, and sentiment for frontend display
+        if top['confidence'] < threshold:
+            explanation = "I need more information about your symptoms to make a confident prediction. I'll ask you some questions to help better understand your condition."
+        else:
+            explanation = (
+                f"Based on your initial description, the most likely condition could be {top['disease']} "
+                f"(confidence: {top['confidence']}%). Let me ask you a few questions to confirm."
+            )
+
     return predictions, explanation, extracted, intent, sentiment
 
-def get_followup_question(user_text, denied_symptoms=None, confirmed_symptoms=None):
-    if denied_symptoms is None:
-        denied_symptoms = []
-    if confirmed_symptoms is None:
-        confirmed_symptoms = []
-    predictions, *_ = predict_disease(user_text)
-    top_diseases = [pred['disease'].lower() for pred in predictions[:3]]
+def get_followup_question(user_text: str, session_id: str, denied_symptoms: List[str] = None, confirmed_symptoms: List[str] = None) -> Tuple[str, Optional[str]]:
+    conv_state = get_or_create_conversation(session_id)
+    
+    # Update conversation state with provided symptoms
+    if denied_symptoms:
+        conv_state.denied_symptoms.update(denied_symptoms)
+    if confirmed_symptoms:
+        conv_state.confirmed_symptoms.update(confirmed_symptoms)
+    
+    # Get predictions if we don't have any
+    if not conv_state.top_predictions:
+        predictions, *_ = predict_disease(user_text, session_id)
+        top_diseases = [pred['disease'] for pred in predictions[:3]]
+    else:
+        top_diseases = [pred['disease'] for pred in conv_state.top_predictions]
+
+    # Gather candidate symptoms from top diseases
     candidate_symptoms = set()
     for disease in top_diseases:
         candidate_symptoms.update(DISEASE_SYMPTOMS.get(disease, []))
-    mentioned = set(word for word in candidate_symptoms if word in user_text.lower())
-    already_asked = set(denied_symptoms) | set(confirmed_symptoms) | mentioned
-    remaining = candidate_symptoms - already_asked
+    
+    # Remove already addressed symptoms
+    mentioned = set(word.lower() for word in candidate_symptoms if word.lower() in user_text.lower())
+    already_asked = conv_state.denied_symptoms | conv_state.confirmed_symptoms | mentioned
+    remaining = candidate_symptoms - already_asked    # If confidence is very high and we've confirmed key symptoms, we can stop
+    if (conv_state.current_confidence >= 85.0 and 
+        len(conv_state.confirmed_symptoms) >= 3 and 
+        len(conv_state.conversation_history) > 2):
+        return "I'm confident in my assessment. Would you like me to explain my diagnosis in more detail?", None
+        
     if remaining:
-        symptom = list(remaining)[0]
+        # Sort remaining symptoms by relevance to top prediction
+        top_disease_symptoms = set(DISEASE_SYMPTOMS.get(top_diseases[0], []))
+        priority_symptoms = remaining & top_disease_symptoms
+        
+        if priority_symptoms:
+            symptom = list(priority_symptoms)[0]
+        else:
+            symptom = list(remaining)[0]
+            
         return f"Are you experiencing '{symptom}'?", symptom
     else:
-        return "Can you describe any other symptoms you have?", None
+        return "Can you describe any other symptoms you're experiencing?", None
